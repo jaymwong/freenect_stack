@@ -411,7 +411,7 @@ void DriverNodelet::depthConnectCb()
   boost::lock_guard<boost::mutex> lock(connect_mutex_);
   //std::cout << "..." << std::endl;
   /// @todo pub_projector_info_? Probably also subscribed to a depth image if you need it
-  bool need_depth = !requested_rgb_;
+  bool need_depth = true; //requested_rgb_;
     //device_->isDepthRegistered() ? pub_depth_registered_.getNumSubscribers() > 0 : pub_depth_.getNumSubscribers() > 0;
   /// @todo Warn if requested topics don't agree with Freenect registration setting
   //std::cout << "  need_depth: " << need_depth << std::endl;
@@ -434,7 +434,7 @@ void DriverNodelet::depthConnectCb()
 void DriverNodelet::irConnectCb()
 {
   boost::lock_guard<boost::mutex> lock(connect_mutex_);
-  bool need_ir = pub_ir_.getNumSubscribers() > 0;
+  bool need_ir = !requested_rgb_; //pub_ir_.getNumSubscribers() > 0;
 
   if (need_ir && !device_->isIRStreamRunning())
   {
