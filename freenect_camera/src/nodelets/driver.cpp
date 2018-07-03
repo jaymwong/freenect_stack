@@ -154,7 +154,7 @@ void DriverNodelet::onInitImpl ()
   log4cxx::LoggerPtr logger_its = log4cxx::Logger::getLogger("ros.image_transport.sync");
   logger_its->setLevel(log4cxx::Level::getError());
   ros::console::notifyLoggerLevelsChanged();
-  
+
   // Load the saved calibrations, if they exist
   rgb_info_manager_ = boost::make_shared<camera_info_manager::CameraInfoManager>(rgb_nh, rgb_name, rgb_info_url);
   ir_info_manager_  = boost::make_shared<camera_info_manager::CameraInfoManager>(ir_nh,  ir_name,  ir_info_url);
@@ -181,7 +181,7 @@ void DriverNodelet::onInitImpl ()
     std::string hardware_id = std::string(device_->getProductName()) + "-" +
         std::string(device_->getSerialNumber());
     diagnostic_updater_->setHardwareID(hardware_id);
-    
+
     // Asus Xtion PRO does not have an RGB camera
     if (device_->hasImageStream())
     {
@@ -190,7 +190,7 @@ void DriverNodelet::onInitImpl ()
       pub_rgb_ = rgb_it.advertiseCamera("image_raw", 1, itssc, itssc, rssc, rssc);
       if (enable_rgb_diagnostics_) {
         pub_rgb_freq_.reset(new TopicDiagnostic("RGB Image", *diagnostic_updater_,
-            FrequencyStatusParam(&pub_freq_min_, &pub_freq_max_, 
+            FrequencyStatusParam(&pub_freq_min_, &pub_freq_max_,
                 diagnostics_tolerance, diagnostics_window_time)));
       }
     }
@@ -202,7 +202,7 @@ void DriverNodelet::onInitImpl ()
       pub_ir_ = ir_it.advertiseCamera("image_raw", 1, itssc, itssc, rssc, rssc);
       if (enable_ir_diagnostics_) {
         pub_ir_freq_.reset(new TopicDiagnostic("IR Image", *diagnostic_updater_,
-            FrequencyStatusParam(&pub_freq_min_, &pub_freq_max_, 
+            FrequencyStatusParam(&pub_freq_min_, &pub_freq_max_,
                 diagnostics_tolerance, diagnostics_window_time)));
       }
     }
@@ -214,17 +214,20 @@ void DriverNodelet::onInitImpl ()
       pub_depth_ = depth_it.advertiseCamera("image_raw", 1, itssc, itssc, rssc, rssc);
       if (enable_depth_diagnostics_) {
         pub_depth_freq_.reset(new TopicDiagnostic("Depth Image", *diagnostic_updater_,
-            FrequencyStatusParam(&pub_freq_min_, &pub_freq_max_, 
+            FrequencyStatusParam(&pub_freq_min_, &pub_freq_max_,
                 diagnostics_tolerance, diagnostics_window_time)));
       }
 
       pub_projector_info_ = projector_nh.advertise<sensor_msgs::CameraInfo>("camera_info", 1, rssc, rssc);
-      
+
       if (device_->isDepthRegistrationSupported()) {
         pub_depth_registered_ = depth_registered_it.advertiseCamera("image_raw", 1, itssc, itssc, rssc, rssc);
       }
     }
   }
+
+  requested_rgb_ = 0;
+  srv_use_rgb_ = projector_nh.advertiseService("get_rgb", &DriverNodelet::getRgbCallback, this);
 
   // Create separate diagnostics thread
   close_diagnostics_ = false;
@@ -327,14 +330,52 @@ void DriverNodelet::setupDevice ()
   device_->registerIRCallback   (&DriverNodelet::irCb,    *this);
 }
 
+bool DriverNodelet::getRgbCallback(std_srvs::SetBool::Request& req, std_srvs::SetBool::Response& res) {
+  if (req.data){
+    requested_rgb_ = 1;
+    ROS_INFO("Service > RGB ON");
+  }
+  else {
+    requested_rgb_ = 0;
+    ROS_INFO("Service > RGB OFF");
+  }
+
+  if (requested_rgb_ && !device_->isImageStreamRunning()) {
+    // Can't stream IR and RGB at the same time. Give RGB preference.
+    if (device_->isIRStreamRunning())
+    {
+      NODELET_ERROR("Cannot stream RGB and IR at the same time. Streaming RGB only.");
+      device_->stopIRStream();
+    }
+
+    device_->startImageStream();
+    startSynchronization();
+    rgb_time_stamp_ = ros::Time::now(); // update stamp for watchdog
+  }
+  else if (!requested_rgb_ && device_->isImageStreamRunning())
+  {
+    stopSynchronization();
+    device_->stopImageStream();
+
+    // Start IR if it's been blocked on RGB subscribers
+    bool need_ir = pub_ir_.getNumSubscribers() > 0;
+    if (need_ir && !device_->isIRStreamRunning())
+    {
+      device_->startIRStream();
+      ir_time_stamp_ = ros::Time::now(); // update stamp for watchdog
+    }
+  }
+  return true;
+}
+
 void DriverNodelet::rgbConnectCb()
 {
   //std::cout << "rgb connect cb called";
   boost::lock_guard<boost::mutex> lock(connect_mutex_);
   //std::cout << "..." << std::endl;
-  bool need_rgb = pub_rgb_.getNumSubscribers() > 0;
+  bool need_rgb = requested_rgb_; //pub_rgb_.getNumSubscribers() > 0;
   //std::cout << "  need_rgb: " << need_rgb << std::endl;
-  
+
   if (need_rgb && !device_->isImageStreamRunning())
   {
     // Can't stream IR and RGB at the same time. Give RGB preference.
@@ -343,10 +384,10 @@ void DriverNodelet::rgbConnectCb()
       NODELET_ERROR("Cannot stream RGB and IR at the same time. Streaming RGB only.");
       device_->stopIRStream();
     }
-    
+
     device_->startImageStream();
     startSynchronization();
-    rgb_time_stamp_ = ros::Time::now(); // update stamp for watchdog 
+    rgb_time_stamp_ = ros::Time::now(); // update stamp for watchdog
   }
   else if (!need_rgb && device_->isImageStreamRunning())
   {
@@ -370,8 +411,8 @@ void DriverNodelet::depthConnectCb()
   boost::lock_guard<boost::mutex> lock(connect_mutex_);
   //std::cout << "..." << std::endl;
   /// @todo pub_projector_info_? Probably also subscribed to a depth image if you need it
-  bool need_depth =
-    device_->isDepthRegistered() ? pub_depth_registered_.getNumSubscribers() > 0 : pub_depth_.getNumSubscribers() > 0;
+  bool need_depth = !requested_rgb_;
+    //device_->isDepthRegistered() ? pub_depth_registered_.getNumSubscribers() > 0 : pub_depth_.getNumSubscribers() > 0;
   /// @todo Warn if requested topics don't agree with Freenect registration setting
   //std::cout << "  need_depth: " << need_depth << std::endl;
 
@@ -394,7 +435,7 @@ void DriverNodelet::irConnectCb()
 {
   boost::lock_guard<boost::mutex> lock(connect_mutex_);
   bool need_ir = pub_ir_.getNumSubscribers() > 0;
-  
+
   if (need_ir && !device_->isIRStreamRunning())
   {
     // Can't stream IR and RGB at the same time
@@ -525,7 +566,7 @@ void DriverNodelet::publishRgbImage(const ImageBuffer& image, ros::Time time) co
   }
   rgb_msg->data.resize(rgb_msg->height * rgb_msg->step);
   fillImage(image, reinterpret_cast<void*>(&rgb_msg->data[0]));
-  
+
   pub_rgb_.publish(rgb_msg, getRgbCameraInfo(image, time));
   if (enable_rgb_diagnostics_)
       pub_rgb_freq_->tick();
@@ -591,7 +632,7 @@ void DriverNodelet::publishIrImage(const ImageBuffer& ir, ros::Time time) const
 
   pub_ir_.publish(ir_msg, getIrCameraInfo(ir, time));
 
-  if (enable_ir_diagnostics_) 
+  if (enable_ir_diagnostics_)
       pub_ir_freq_->tick();
 }
 
@@ -710,7 +751,7 @@ void DriverNodelet::configCb(Config &config, uint32_t level)
   if (device_->hasImageStream ())
   {
     old_image_mode = device_->getImageOutputMode ();
-     
+
     // does the device support the new image mode?
     image_mode = mapConfigMode2OutputMode (config.image_mode);
 
@@ -726,7 +767,7 @@ void DriverNodelet::configCb(Config &config, uint32_t level)
       image_mode = compatible_image_mode = default_mode;
     }
   }
-  
+
   OutputMode old_depth_mode, depth_mode, compatible_depth_mode;
   old_depth_mode = device_->getDepthOutputMode();
   depth_mode = mapConfigMode2OutputMode (config.depth_mode);
@@ -737,7 +778,7 @@ void DriverNodelet::configCb(Config &config, uint32_t level)
                  "Falling back to default depth output mode %d.",
                   depth_mode,
                   default_mode);
-    
+
     config.depth_mode = mapMode2ConfigMode(default_mode);
     depth_mode = compatible_depth_mode = default_mode;
   }
@@ -847,7 +888,7 @@ void DriverNodelet::watchDog (const ros::TimerEvent& event)
   }
 
   if (timed_out) {
-    ROS_INFO("Device timed out. Flushing device."); 
+    ROS_INFO("Device timed out. Flushing device.");
     device_->flushDeviceStreams();
   }
 

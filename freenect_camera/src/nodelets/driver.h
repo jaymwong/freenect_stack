@@ -41,6 +41,7 @@
 
 // ROS communication
 #include <ros/ros.h>
+#include <std_srvs/SetBool.h>
 #include <nodelet/nodelet.h>
 #include <image_transport/image_transport.h>
 #include <boost/thread.hpp>
@@ -105,6 +106,10 @@ namespace freenect_camera
       image_transport::CameraPublisher pub_depth_, pub_depth_registered_;
       image_transport::CameraPublisher pub_ir_;
       ros::Publisher pub_projector_info_;
+
+      ros::ServiceServer srv_use_rgb_;
+      int requested_rgb_;
+      bool getRgbCallback(std_srvs::SetBool::Request& req, std_srvs::SetBool::Response& res);
 
       // Maintain frequency diagnostics on all sensors
       boost::shared_ptr<diagnostic_updater::Updater> diagnostic_updater_;

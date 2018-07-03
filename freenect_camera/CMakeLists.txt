@@ -7,6 +7,7 @@ find_package(catkin REQUIRED
              dynamic_reconfigure
              image_transport
              nodelet
+             std_srvs
              roscpp
              sensor_msgs
              pluginlib )
